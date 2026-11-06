@@ -1,0 +1,1602 @@
+# 手机一键出包工作流（自包含：源码全在里面）
+#
+# 用法（只需一台安卓手机 + 一个 GitHub 账号，全程浏览器）：
+#   1. github.com → New repository → 名字随意（如 delta-esp）→ Public → Create repository
+#   2. 仓库页 → Add file → Create new file → 文件名输入：.github/workflows/build.yml
+#   3. 把本文件全部内容粘进去 → Commit changes
+#   4. 仓库顶部 Actions → 等 build-apk 变绿（3~5 分钟）→ 点进这次运行 → 底部 Artifacts
+#      → 下载 delta-esp-apk.zip → 解压得到 app-debug.apk → 安装
+#
+name: build-apk
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK 34
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Write project
+        run: |
+          set -e
+          mkdir -p app/src/main/java/com/lcs/deltaesp
+          mkdir -p app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "DeltaEsp"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          kotlin.code.style=official
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.lcs.deltaesp"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.lcs.deltaesp"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              lint {
+                  abortOnError = false
+                  checkReleaseBuilds = false
+              }
+          }
+
+          dependencies {
+              implementation("androidx.core:core-ktx:1.13.1")
+              implementation("androidx.appcompat:appcompat:1.7.0")
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools">
+
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="false"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="@string/app_name"
+                  android:largeHeap="true"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.DeltaEsp"
+                  tools:targetApi="34">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".CaptureService"
+                      android:exported="false"
+                      android:stopWithTask="false"
+                      android:foregroundServiceType="mediaProjection" />
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/values/strings.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">三角洲悬浮助手</string>
+          </resources>
+          EOF
+
+          cat > app/src/main/res/values/colors.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_launcher_background">#0E1218</color>
+          </resources>
+          EOF
+
+          cat > app/src/main/res/values/themes.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.DeltaEsp" parent="Theme.AppCompat.NoActionBar">
+                  <item name="colorPrimary">#00FFAA</item>
+                  <item name="colorPrimaryDark">#0E1218</item>
+                  <item name="colorAccent">#00FFAA</item>
+                  <item name="android:windowBackground">#0E1218</item>
+                  <item name="android:statusBarColor">#0E1218</item>
+                  <item name="android:navigationBarColor">#0E1218</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#0E1218"
+                  android:pathData="M0,0h108v108h-108z" />
+              <path
+                  android:strokeColor="#00FFAA"
+                  android:strokeWidth="3"
+                  android:fillColor="#00000000"
+                  android:pathData="M34,34h40v40h-40z" />
+              <path
+                  android:strokeColor="#00FFAA"
+                  android:strokeWidth="3"
+                  android:fillColor="#00000000"
+                  android:pathData="M54,26v14M54,68v14M26,54h14M68,54h14" />
+          </vector>
+          EOF
+
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background" />
+              <foreground android:drawable="@drawable/ic_launcher" />
+          </adaptive-icon>
+          EOF
+
+          cat > app/src/main/java/com/lcs/deltaesp/Prefs.kt <<'EOF'
+          package com.lcs.deltaesp
+
+          import android.content.Context
+          import android.content.SharedPreferences
+
+          class Prefs(ctx: Context) {
+
+              private val sp: SharedPreferences =
+                  ctx.getSharedPreferences("lcs_delta_esp", Context.MODE_PRIVATE)
+
+              var sensitivity: Int
+                  get() = sp.getInt("sens", 55)
+                  set(v) = sp.edit().putInt("sens", v.coerceIn(0, 100)).apply()
+
+              var alpha: Int
+                  get() = sp.getInt("alpha", 70)
+                  set(v) = sp.edit().putInt("alpha", v.coerceIn(10, 100)).apply()
+
+              var scale: Int
+                  get() = sp.getInt("scale", 4)
+                  set(v) = sp.edit().putInt("scale", v.coerceIn(2, 8)).apply()
+
+              var fps: Int
+                  get() = sp.getInt("fps", 10)
+                  set(v) = sp.edit().putInt("fps", v.coerceIn(2, 30)).apply()
+
+              var drawEnabled: Boolean
+                  get() = sp.getBoolean("draw", true)
+                  set(v) = sp.edit().putBoolean("draw", v).apply()
+
+              var gamePkg: String
+                  get() = sp.getString("pkg", "com.tencent.tmgp.dfm") ?: "com.tencent.tmgp.dfm"
+                  set(v) = sp.edit().putString("pkg", v).apply()
+          }
+          EOF
+
+          cat > app/src/main/java/com/lcs/deltaesp/GlowDetector.kt <<'EOF'
+          package com.lcs.deltaesp
+
+          import kotlin.math.abs
+          import kotlin.math.max
+          import kotlin.math.min
+
+          data class Box(val x: Int, val y: Int, val w: Int, val h: Int, val conf: Int = 1) {
+              val cx: Int get() = x + w / 2
+              val cy: Int get() = y + h / 2
+          }
+
+          class GlowDetector {
+
+              private class Cell(var x: Int, var y: Int, var w: Int, var h: Int, var pix: Int)
+              private class Track(
+                  var x: Int, var y: Int, var w: Int, var h: Int, var conf: Int, var miss: Int
+              )
+
+              var redMin = 172
+              var greenMax = 77
+              var blueMax = 79
+              var dominance = 71
+              var minPixels = 28
+              var minHeight = 12
+              var minAspect = 1.05f
+              var maxAspect = 7.0f
+              var maxWidthRatio = 0.55f
+              var maxHeightRatio = 0.96f
+              var hudCropTop = 0.055f
+              var hudCropBottom = 0.945f
+              var maxTargets = 10
+              var forceOrder = -1
+
+              private var orderResolved = -1
+              private var w = 0
+              private var h = 0
+              private var mask = IntArray(0)
+              private var shadow = IntArray(0)
+              private val live = ArrayList<Track>()
+              private val out = ArrayList<Box>()
+
+              fun orderLabel(): String = if (orderResolved == 1) "BGRA" else "RGBA"
+
+              fun configure(sensitivity: Int) {
+                  val s = sensitivity.coerceIn(0, 100)
+                  redMin = 205 - (s * 60) / 100
+                  greenMax = 50 + (s * 50) / 100
+                  blueMax = 55 + (s * 45) / 100
+                  dominance = 90 - (s * 35) / 100
+                  minPixels = 44 - (s * 28) / 100
+              }
+
+              fun reset() {
+                  live.clear()
+              }
+
+              fun feed(
+                  buf: ByteArray, srcW: Int, srcH: Int, rowStride: Int, pixelStride: Int
+              ): List<Box> {
+                  if (srcW < 24 || srcH < 24) return emptyList()
+                  ensure(srcW, srcH)
+                  if (orderResolved < 0) resolveOrder(buf, srcW, srcH, rowStride, pixelStride)
+                  val rOff = if (orderResolved == 1) 2 else 0
+                  val bOff = if (orderResolved == 1) 0 else 2
+
+                  var i = 0
+                  for (y in 0 until h) {
+                      val base = y * rowStride
+                      for (x in 0 until w) {
+                          val p = base + x * pixelStride
+                          var on = 0
+                          if (p + 2 < buf.size) {
+                              val r = buf[p + rOff].toInt() and 0xFF
+                              val g = buf[p + 1].toInt() and 0xFF
+                              val b = buf[p + bOff].toInt() and 0xFF
+                              if (r >= redMin && g <= greenMax && b <= blueMax &&
+                                  r - max(g, b) >= dominance
+                              ) on = 1
+                          }
+                          mask[i++] = on
+                      }
+                  }
+
+                  bridge()
+                  val raw = cluster()
+                  val merged = merge(raw)
+                  val filtered = filter(merged)
+                  return track(filtered)
+              }
+
+              private fun ensure(nw: Int, nh: Int) {
+                  if (nw != w || nh != h) {
+                      w = nw
+                      h = nh
+                      mask = IntArray(w * h)
+                      shadow = IntArray(w * h)
+                      live.clear()
+                      orderResolved = -1
+                  }
+              }
+
+              private fun resolveOrder(
+                  buf: ByteArray, srcW: Int, srcH: Int, rowStride: Int, pixelStride: Int
+              ) {
+                  if (forceOrder == 0 || forceOrder == 1) {
+                      orderResolved = forceOrder
+                      return
+                  }
+                  var rgba = 0
+                  var bgra = 0
+                  var y = 0
+                  while (y < srcH) {
+                      val base = y * rowStride
+                      var x = 0
+                      while (x < srcW) {
+                          val p = base + x * pixelStride
+                          if (p + 2 < buf.size) {
+                              val c0 = buf[p].toInt() and 0xFF
+                              val g = buf[p + 1].toInt() and 0xFF
+                              val c2 = buf[p + 2].toInt() and 0xFF
+                              if (isRed(c0, g, c2)) rgba++
+                              if (isRed(c2, g, c0)) bgra++
+                          }
+                          x += 3
+                      }
+                      y += 3
+                  }
+                  orderResolved = if (bgra > rgba * 2 && bgra > 8) 1 else 0
+              }
+
+              private fun isRed(r: Int, g: Int, b: Int): Boolean =
+                  r >= redMin && g <= greenMax && b <= blueMax && r - max(g, b) >= dominance
+
+              private fun bridge() {
+                  System.arraycopy(mask, 0, shadow, 0, mask.size)
+                  for (y in 1 until h - 1) {
+                      val base = y * w
+                      val up = base - w
+                      val dn = base + w
+                      for (x in 0 until w) {
+                          if (shadow[base + x] == 0 && shadow[up + x] == 1 && shadow[dn + x] == 1) {
+                              mask[base + x] = 1
+                          }
+                      }
+                  }
+              }
+
+              private fun cluster(): ArrayList<Cell> {
+                  val open = ArrayList<Cell>()
+                  val done = ArrayList<Cell>()
+                  for (y in 0 until h) {
+                      val base = y * w
+                      var x = 0
+                      while (x < w) {
+                          if (mask[base + x] == 0) {
+                              x++
+                              continue
+                          }
+                          val start = x
+                          while (x < w && mask[base + x] == 1) x++
+                          val runW = x - start
+                          if (runW < 2) continue
+                          val cx = start + runW / 2
+                          var hit: Cell? = null
+                          var best = Int.MAX_VALUE
+                          for (c in open) {
+                              if (c.y + c.h < y - 3) continue
+                              val d = abs(c.x + c.w / 2 - cx)
+                              val lim = max(6, min(c.w, runW))
+                              if (d <= lim && d < best) {
+                                  best = d
+                                  hit = c
+                              }
+                          }
+                          if (hit == null) {
+                              open.add(Cell(start, y, runW, 1, runW))
+                          } else {
+                              val nx = min(hit.x, start)
+                              val nr = max(hit.x + hit.w, x)
+                              hit.x = nx
+                              hit.w = nr - nx
+                              hit.h = y - hit.y + 1
+                              hit.pix += runW
+                          }
+                      }
+                      var k = 0
+                      while (k < open.size) {
+                          val c = open[k]
+                          if (c.y + c.h < y - 2) {
+                              done.add(c)
+                              open.removeAt(k)
+                          } else {
+                              k++
+                          }
+                      }
+                  }
+                  done.addAll(open)
+                  return done
+              }
+
+              private fun merge(input: ArrayList<Cell>): ArrayList<Cell> {
+                  var changed = true
+                  while (changed) {
+                      changed = false
+                      var i = 0
+                      outer@ while (i < input.size) {
+                          var j = i + 1
+                          while (j < input.size) {
+                              val a = input[i]
+                              val b = input[j]
+                              val ox = min(a.x + a.w, b.x + b.w) - max(a.x, b.x)
+                              if (ox <= 0) {
+                                  j++
+                                  continue
+                              }
+                              val oxr = ox.toFloat() / min(a.w, b.w).toFloat()
+                              val gap = max(a.y, b.y) - min(a.y + a.h, b.y + b.h)
+                              if (oxr >= 0.45f && gap <= max(4, min(a.h, b.h) / 3)) {
+                                  val nx = min(a.x, b.x)
+                                  val ny = min(a.y, b.y)
+                                  a.w = max(a.x + a.w, b.x + b.w) - nx
+                                  a.h = max(a.y + a.h, b.y + b.h) - ny
+                                  a.x = nx
+                                  a.y = ny
+                                  a.pix += b.pix
+                                  input.removeAt(j)
+                                  changed = true
+                                  continue@outer
+                              }
+                              j++
+                          }
+                          i++
+                      }
+                  }
+                  return input
+              }
+
+              private fun filter(input: ArrayList<Cell>): ArrayList<Box> {
+                  out.clear()
+                  val top = h * hudCropTop
+                  val bottom = h * hudCropBottom
+                  for (c in input) {
+                      if (c.pix < minPixels) continue
+                      if (c.h < minHeight) continue
+                      if (c.y + c.h / 2 < top || c.y + c.h / 2 > bottom) continue
+                      if (c.w > w * maxWidthRatio) continue
+                      if (c.h > h * maxHeightRatio) continue
+                      val aspect = c.h.toFloat() / c.w.toFloat()
+                      if (aspect < minAspect || aspect > maxAspect) continue
+                      out.add(Box(c.x, c.y, c.w, c.h))
+                  }
+                  return out
+              }
+
+              private fun track(input: ArrayList<Box>): List<Box> {
+                  val used = BooleanArray(input.size)
+                  val result = ArrayList<Box>(input.size)
+                  for (t in live) {
+                      var bi = -1
+                      var bd = Int.MAX_VALUE
+                      for (i in input.indices) {
+                          if (used[i]) continue
+                          val b = input[i]
+                          val d = abs(b.cx - (t.x + t.w / 2)) + 2 * abs(b.cy - (t.y + t.h / 2))
+                          if (d < bd) {
+                              bd = d
+                              bi = i
+                          }
+                      }
+                      val gate = max(30, t.w) * 2
+                      if (bi >= 0 && bd <= gate) {
+                          val b = input[bi]
+                          used[bi] = true
+                          t.x = (t.x * 0.5f + b.x * 0.5f).toInt()
+                          t.y = (t.y * 0.5f + b.y * 0.5f).toInt()
+                          t.w = (t.w * 0.5f + b.w * 0.5f).toInt()
+                          t.h = (t.h * 0.5f + b.h * 0.5f).toInt()
+                          t.conf = min(t.conf + 1, 4)
+                          t.miss = 0
+                      } else {
+                          t.miss++
+                      }
+                      if (t.conf >= 2 && t.miss <= 1) {
+                          result.add(Box(t.x, t.y, t.w, t.h, t.conf))
+                      }
+                  }
+                  for (i in input.indices) {
+                      if (used[i]) continue
+                      val b = input[i]
+                      live.add(Track(b.x, b.y, b.w, b.h, 1, 0))
+                  }
+                  live.removeAll { it.miss > 1 || it.conf <= 0 }
+                  if (live.size > 24) {
+                      live.subList(0, live.size - 24).clear()
+                  }
+                  result.sortByDescending { it.w * it.h }
+                  return if (result.size > maxTargets) result.subList(0, maxTargets) else result
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/lcs/deltaesp/OverlayView.kt <<'EOF'
+          package com.lcs.deltaesp
+
+          import android.content.Context
+          import android.graphics.Canvas
+          import android.graphics.Color
+          import android.graphics.Paint
+          import android.graphics.RectF
+          import android.view.View
+          import kotlin.math.min
+
+          class OverlayView(ctx: Context) : View(ctx) {
+
+              private val boxes = ArrayList<RectF>()
+              private var hud = ""
+              private var fillAlpha = 60
+              private var lineAlpha = 210
+              private var enabled = true
+
+              private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+              private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                  style = Paint.Style.STROKE
+                  strokeWidth = dp(1.6f)
+              }
+              private val corner = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                  style = Paint.Style.STROKE
+                  strokeWidth = dp(2.6f)
+                  strokeCap = Paint.Cap.ROUND
+              }
+              private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                  color = Color.argb(235, 0, 255, 170)
+                  textSize = dp(10.5f)
+                  typeface = android.graphics.Typeface.MONOSPACE
+              }
+              private val hudPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                  color = Color.argb(200, 0, 255, 170)
+                  textSize = dp(9.5f)
+                  typeface = android.graphics.Typeface.MONOSPACE
+              }
+
+              init {
+                  setBackgroundColor(Color.TRANSPARENT)
+                  isClickable = false
+                  isFocusable = false
+              }
+
+              fun configure(fillPercent: Int, drawing: Boolean) {
+                  fillAlpha = (fillPercent.coerceIn(10, 100) * 255 / 100) / 3
+                  lineAlpha = fillPercent.coerceIn(10, 100) * 255 / 100
+                  enabled = drawing
+                  invalidate()
+              }
+
+              fun submit(list: List<RectF>, hudLine: String) {
+                  boxes.clear()
+                  boxes.addAll(list)
+                  hud = hudLine
+                  invalidate()
+              }
+
+              fun clearAll() {
+                  boxes.clear()
+                  hud = ""
+                  invalidate()
+              }
+
+              override fun onDraw(canvas: Canvas) {
+                  super.onDraw(canvas)
+                  if (enabled) {
+                      val c = Color.argb(lineAlpha, 0, 255, 170)
+                      for (r in boxes) {
+                          fill.color = Color.argb(fillAlpha, 0, 255, 170)
+                          canvas.drawRect(r, fill)
+                          line.color = c
+                          canvas.drawRect(r, line)
+                          val arm = min(r.width(), r.height()) * 0.3f
+                          corner.color = c
+                          canvas.drawLine(r.left, r.top, r.left + arm, r.top, corner)
+                          canvas.drawLine(r.left, r.top, r.left, r.top + arm, corner)
+                          canvas.drawLine(r.right, r.top, r.right - arm, r.top, corner)
+                          canvas.drawLine(r.right, r.top, r.right, r.top + arm, corner)
+                          canvas.drawLine(r.left, r.bottom, r.left + arm, r.bottom, corner)
+                          canvas.drawLine(r.left, r.bottom, r.left, r.bottom - arm, corner)
+                          canvas.drawLine(r.right, r.bottom, r.right - arm, r.bottom, corner)
+                          canvas.drawLine(r.right, r.bottom, r.right, r.bottom - arm, corner)
+                          canvas.drawText(
+                              "${r.height().toInt()}px", r.left + dp(3f), r.top - dp(4f), text
+                          )
+                      }
+                  }
+                  if (hud.isNotEmpty()) {
+                      canvas.drawText(hud, dp(10f), dp(24f), hudPaint)
+                  }
+              }
+
+              private fun dp(v: Float) = v * resources.displayMetrics.density
+          }
+          EOF
+
+          cat > app/src/main/java/com/lcs/deltaesp/PanelView.kt <<'EOF'
+          package com.lcs.deltaesp
+
+          import android.content.Context
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.view.Gravity
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.LinearLayout
+          import android.widget.SeekBar
+          import android.widget.TextView
+          import androidx.appcompat.widget.SwitchCompat
+
+          class PanelView(
+              ctx: Context, private val prefs: Prefs, private val cb: Callback
+          ) : LinearLayout(ctx) {
+
+              interface Callback {
+                  fun onDrawEnabled(enabled: Boolean)
+                  fun onSensitivity(v: Int)
+                  fun onAlpha(v: Int)
+                  fun onFps(v: Int)
+                  fun onScale(v: Int)
+                  fun onClose()
+              }
+
+              val header: LinearLayout
+              private val statusView: TextView
+
+              init {
+                  orientation = VERTICAL
+                  background = GradientDrawable().apply {
+                      cornerRadius = dp(14f).toFloat()
+                      setColor(Color.argb(216, 14, 18, 24))
+                      setStroke(dp(1f), Color.argb(150, 0, 255, 170))
+                  }
+                  setPadding(dp(12f), dp(8f), dp(12f), dp(12f))
+                  minimumWidth = dp(232f)
+
+                  header = LinearLayout(ctx).apply {
+                      orientation = HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(0, 0, 0, dp(4f))
+                  }
+                  val title = TextView(ctx).apply {
+                      text = "LCS · 悬浮绘制"
+                      setTextColor(Color.parseColor("#00FFAA"))
+                      textSize = 13.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                  }
+                  val close = TextView(ctx).apply {
+                      text = "✕"
+                      setTextColor(Color.parseColor("#8FA0AE"))
+                      textSize = 16f
+                      setPadding(dp(12f), 0, dp(2f), 0)
+                      setOnClickListener { cb.onClose() }
+                  }
+                  header.addView(
+                      title,
+                      LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                  )
+                  header.addView(close)
+                  addView(header)
+
+                  val sw = SwitchCompat(ctx).apply {
+                      isChecked = prefs.drawEnabled
+                      setOnCheckedChangeListener { _, v ->
+                          prefs.drawEnabled = v
+                          cb.onDrawEnabled(v)
+                      }
+                  }
+                  addView(labelRow("绘制目标框", sw))
+
+                  addView(slider("灵敏度", 0, 100, prefs.sensitivity) {
+                      prefs.sensitivity = it
+                      cb.onSensitivity(it)
+                  })
+
+                  addView(slider("不透明度", 10, 100, prefs.alpha) {
+                      prefs.alpha = it
+                      cb.onAlpha(it)
+                  })
+
+                  addView(slider("分析帧率", 2, 30, prefs.fps) {
+                      prefs.fps = it
+                      cb.onFps(it)
+                  })
+
+                  addView(slider("采样倍数", 2, 8, prefs.scale) {
+                      prefs.scale = it
+                      cb.onScale(it)
+                  })
+
+                  statusView = TextView(ctx).apply {
+                      text = "等待采集…"
+                      setTextColor(Color.parseColor("#7F8C99"))
+                      textSize = 10.5f
+                      typeface = Typeface.MONOSPACE
+                      setPadding(0, dp(6f), 0, 0)
+                  }
+                  addView(statusView)
+              }
+
+              fun setStatus(s: String) {
+                  statusView.text = s
+              }
+
+              private fun labelRow(label: String, right: View): LinearLayout {
+                  val row = LinearLayout(context).apply {
+                      orientation = HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(0, dp(2f), 0, dp(2f))
+                  }
+                  val tv = TextView(context).apply {
+                      text = label
+                      setTextColor(Color.parseColor("#C7D3DD"))
+                      textSize = 12f
+                  }
+                  row.addView(
+                      tv,
+                      LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                  )
+                  row.addView(right)
+                  return row
+              }
+
+              private fun slider(
+                  name: String, min: Int, max: Int, value: Int, onChange: (Int) -> Unit
+              ): LinearLayout {
+                  val wrap = LinearLayout(context).apply {
+                      orientation = VERTICAL
+                      setPadding(0, dp(3f), 0, 0)
+                  }
+                  val tv = TextView(context).apply {
+                      text = "$name  $value"
+                      setTextColor(Color.parseColor("#C7D3DD"))
+                      textSize = 12f
+                  }
+                  val sb = SeekBar(context).apply {
+                      this.max = max - min
+                      progress = (value - min).coerceIn(0, max - min)
+                      setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                          override fun onProgressChanged(bar: SeekBar?, p: Int, fromUser: Boolean) {
+                              val v = p + min
+                              tv.text = "$name  $v"
+                              onChange(v)
+                          }
+
+                          override fun onStartTrackingTouch(bar: SeekBar?) {}
+                          override fun onStopTrackingTouch(bar: SeekBar?) {}
+                      })
+                  }
+                  wrap.addView(tv)
+                  wrap.addView(
+                      sb,
+                      LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(28f))
+                  )
+                  return wrap
+              }
+
+              private fun dp(v: Float) = (v * resources.displayMetrics.density).toInt()
+          }
+          EOF
+
+          cat > app/src/main/java/com/lcs/deltaesp/CaptureService.kt <<'EOF'
+          package com.lcs.deltaesp
+
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.PendingIntent
+          import android.app.Service
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.ServiceInfo
+          import android.content.res.Configuration
+          import android.graphics.PixelFormat
+          import android.graphics.RectF
+          import android.hardware.display.DisplayManager
+          import android.hardware.display.VirtualDisplay
+          import android.media.ImageReader
+          import android.media.projection.MediaProjection
+          import android.media.projection.MediaProjectionManager
+          import android.os.Build
+          import android.os.Handler
+          import android.os.HandlerThread
+          import android.os.IBinder
+          import android.os.Looper
+          import android.os.SystemClock
+          import android.view.Gravity
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.WindowManager
+          import androidx.core.app.NotificationCompat
+          import androidx.core.app.ServiceCompat
+          import androidx.core.content.ContextCompat
+          import kotlin.math.min
+
+          class CaptureService : Service() {
+
+              companion object {
+                  private const val ACTION_START = "com.lcs.deltaesp.START"
+                  private const val ACTION_STOP = "com.lcs.deltaesp.STOP"
+                  private const val EXTRA_CODE = "code"
+                  private const val EXTRA_DATA = "data"
+                  private const val CHANNEL = "lcs_esp"
+                  private const val NOTI_ID = 0x5E5
+                  private const val DISPLAY_DELAY_MS = 2000L
+
+                  fun start(ctx: Context, code: Int, data: Intent) {
+                      val i = Intent(ctx, CaptureService::class.java).apply {
+                          action = ACTION_START
+                          putExtra(EXTRA_CODE, code)
+                          putExtra(EXTRA_DATA, data)
+                      }
+                      ContextCompat.startForegroundService(ctx, i)
+                  }
+
+                  fun stop(ctx: Context) {
+                      val i = Intent(ctx, CaptureService::class.java).apply { action = ACTION_STOP }
+                      ctx.startService(i)
+                  }
+              }
+
+              private lateinit var wm: WindowManager
+              private lateinit var prefs: Prefs
+              private val main = Handler(Looper.getMainLooper())
+
+              private var overlay: OverlayView? = null
+              private var panel: PanelView? = null
+              private var panelParams: WindowManager.LayoutParams? = null
+
+              private var projection: MediaProjection? = null
+              private var vd: VirtualDisplay? = null
+              private var reader: ImageReader? = null
+              private var thread: HandlerThread? = null
+              private var worker: Handler? = null
+
+              private val detector = GlowDetector()
+              private var frameBuf = ByteArray(0)
+
+              @Volatile private var running = false
+              @Volatile private var released = false
+              private var generation = 0
+
+              private var screenW = 1080
+              private var screenH = 2400
+              private var capW = 270
+              private var capH = 600
+
+              private var lastFrameAt = 0L
+              private var frameCount = 0
+              private var fpsMark = 0L
+              private var fps = 0f
+              private var lastOrientation = Configuration.ORIENTATION_UNDEFINED
+
+              override fun onCreate() {
+                  super.onCreate()
+                  wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                  prefs = Prefs(this)
+                  detector.configure(prefs.sensitivity)
+                  lastOrientation = resources.configuration.orientation
+                  createChannel()
+              }
+
+              override fun onConfigurationChanged(newConfig: Configuration) {
+                  super.onConfigurationChanged(newConfig)
+                  if (newConfig.orientation == lastOrientation) return
+                  lastOrientation = newConfig.orientation
+                  if (released || !running) return
+                  main.postDelayed({ restartDisplay() }, 900L)
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  when (intent?.action) {
+                      ACTION_STOP -> {
+                          stopAll(true)
+                          return START_NOT_STICKY
+                      }
+                      ACTION_START -> {
+                          startForegroundCompat()
+                          val code = intent.getIntExtra(EXTRA_CODE, 0)
+                          @Suppress("DEPRECATION")
+                          val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
+                          if (data == null) {
+                              stopSelf()
+                              return START_NOT_STICKY
+                          }
+                          if (running) stopAll(false)
+                          released = false
+                          if (!setupOverlay()) {
+                              ServiceCompat.stopForeground(
+                                  this, ServiceCompat.STOP_FOREGROUND_REMOVE
+                              )
+                              stopSelf()
+                              return START_NOT_STICKY
+                          }
+                          startCapture(code, data)
+                      }
+                  }
+                  return START_STICKY
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = null
+
+              override fun onDestroy() {
+                  stopAll(false)
+                  super.onDestroy()
+              }
+
+              private fun createChannel() {
+                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+                  val nm = getSystemService(NotificationManager::class.java) ?: return
+                  if (nm.getNotificationChannel(CHANNEL) != null) return
+                  val ch = NotificationChannel(
+                      CHANNEL, "悬浮绘制", NotificationManager.IMPORTANCE_LOW
+                  )
+                  ch.setShowBadge(false)
+                  nm.createNotificationChannel(ch)
+              }
+
+              private fun buildNotification(): Notification {
+                  val pi = PendingIntent.getActivity(
+                      this, 0,
+                      Intent(this, MainActivity::class.java),
+                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                  )
+                  return NotificationCompat.Builder(this, CHANNEL)
+                      .setSmallIcon(android.R.drawable.ic_menu_view)
+                      .setContentTitle("悬浮绘制运行中")
+                      .setContentText("MediaProjection 采集 + 本地像素识别")
+                      .setOngoing(true)
+                      .setContentIntent(pi)
+                      .setPriority(NotificationCompat.PRIORITY_LOW)
+                      .build()
+              }
+
+              private fun startForegroundCompat() {
+                  val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                      ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0
+                  ServiceCompat.startForeground(this, NOTI_ID, buildNotification(), type)
+              }
+
+              private fun overlayType(): Int =
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                      WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                  else
+                      windowTypePhone()
+
+              @Suppress("DEPRECATION")
+              private fun windowTypePhone(): Int = WindowManager.LayoutParams.TYPE_PHONE
+
+              private fun setupOverlay(): Boolean {
+                  if (overlay != null) return true
+                  refreshScreenSize()
+
+                  val view = OverlayView(this)
+                  val lp = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.MATCH_PARENT,
+                      WindowManager.LayoutParams.MATCH_PARENT,
+                      overlayType(),
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                          WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                          WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                          WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                      PixelFormat.TRANSLUCENT
+                  )
+                  lp.gravity = Gravity.TOP or Gravity.START
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                      lp.layoutInDisplayCutoutMode =
+                          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                  }
+                  view.configure(prefs.alpha, prefs.drawEnabled)
+                  try {
+                      wm.addView(view, lp)
+                  } catch (t: Throwable) {
+                      return false
+                  }
+                  overlay = view
+
+                  val p = PanelView(this, prefs, object : PanelView.Callback {
+                      override fun onDrawEnabled(enabled: Boolean) {
+                          overlay?.configure(prefs.alpha, enabled)
+                      }
+
+                      override fun onSensitivity(v: Int) {
+                          detector.configure(v)
+                      }
+
+                      override fun onAlpha(v: Int) {
+                          overlay?.configure(v, prefs.drawEnabled)
+                      }
+
+                      override fun onFps(v: Int) {
+                      }
+
+                      override fun onScale(v: Int) {
+                          panel?.setStatus("采样=" + v + "x，重开采集后生效")
+                      }
+
+                      override fun onClose() {
+                          stopAll(true)
+                      }
+                  })
+                  val pp = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      overlayType(),
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                          WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                      PixelFormat.TRANSLUCENT
+                  )
+                  pp.gravity = Gravity.TOP or Gravity.START
+                  pp.x = dp(12)
+                  pp.y = dp(150)
+                  try {
+                      wm.addView(p, pp)
+                  } catch (t: Throwable) {
+                      return true
+                  }
+                  panel = p
+                  panelParams = pp
+                  attachDrag(p.header)
+                  return true
+              }
+
+              private fun attachDrag(v: View) {
+                  var rawX0 = 0f
+                  var rawY0 = 0f
+                  var x0 = 0
+                  var y0 = 0
+                  v.setOnTouchListener { _, e ->
+                      val lp = panelParams
+                      when (e.actionMasked) {
+                          MotionEvent.ACTION_DOWN -> {
+                              rawX0 = e.rawX
+                              rawY0 = e.rawY
+                              x0 = lp?.x ?: 0
+                              y0 = lp?.y ?: 0
+                              true
+                          }
+                          MotionEvent.ACTION_MOVE -> {
+                              if (lp != null) {
+                                  lp.x = (x0 + (e.rawX - rawX0)).toInt()
+                                  lp.y = (y0 + (e.rawY - rawY0)).toInt()
+                                  runCatching { wm.updateViewLayout(panel, lp) }
+                              }
+                              true
+                          }
+                          else -> true
+                      }
+                  }
+              }
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+              private fun refreshScreenSize() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                      val b = wm.maximumWindowMetrics.bounds
+                      screenW = b.width()
+                      screenH = b.height()
+                  } else {
+                      @Suppress("DEPRECATION")
+                      val dm = resources.displayMetrics
+                      screenW = dm.widthPixels
+                      screenH = dm.heightPixels
+                  }
+              }
+
+              private fun startCapture(code: Int, data: Intent) {
+                  val mpm =
+                      getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                  val mp = try {
+                      mpm.getMediaProjection(code, data)
+                  } catch (t: Throwable) {
+                      null
+                  }
+                  if (mp == null) {
+                      stopAll(true)
+                      return
+                  }
+                  val gen = ++generation
+                  projection = mp
+                  mp.registerCallback(object : MediaProjection.Callback() {
+                      override fun onStop() {
+                          main.post { if (gen == generation) stopAll(true) }
+                      }
+                  }, main)
+
+                  thread = HandlerThread("lcs-esp-worker").also { it.start() }
+                  worker = Handler(thread!!.looper)
+                  detector.reset()
+                  detector.configure(prefs.sensitivity)
+                  panel?.setStatus("等待游戏进入前台…")
+                  main.postDelayed({ if (gen == generation) buildDisplay(gen) }, DISPLAY_DELAY_MS)
+              }
+
+              private fun restartDisplay() {
+                  if (released || projection == null || worker == null) return
+                  running = false
+                  runCatching { vd?.release() }
+                  vd = null
+                  runCatching { reader?.close() }
+                  reader = null
+                  detector.reset()
+                  refreshScreenSize()
+                  val gen = generation
+                  main.postDelayed({ if (gen == generation) buildDisplay(gen) }, 500L)
+              }
+
+              private fun buildDisplay(gen: Int) {
+                  if (released || gen != generation) return
+                  if (vd != null) return
+                  val mp = projection ?: return
+                  val w = worker ?: return
+                  refreshScreenSize()
+                  val d = prefs.scale.coerceIn(2, 8)
+                  capW = ((screenW / d) / 2) * 2
+                  capH = ((screenH / d) / 2) * 2
+                  if (capW < 64 || capH < 64) return
+
+                  val r = ImageReader.newInstance(capW, capH, PixelFormat.RGBA_8888, 2)
+                  reader = r
+                  r.setOnImageAvailableListener({ onFrame(it) }, w)
+                  vd = try {
+                      mp.createVirtualDisplay(
+                          "lcs-esp-capture",
+                          capW, capH,
+                          resources.displayMetrics.densityDpi,
+                          DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                          r.surface,
+                          null,
+                          w
+                      )
+                  } catch (t: Throwable) {
+                      null
+                  }
+                  if (vd == null) {
+                      stopAll(true)
+                      return
+                  }
+                  running = true
+                  lastFrameAt = 0L
+                  fpsMark = SystemClock.elapsedRealtime()
+                  frameCount = 0
+                  panel?.setStatus("采集中 " + capW + "x" + capH)
+              }
+
+              private fun onFrame(r: ImageReader) {
+                  if (!running) return
+                  val img = try {
+                      r.acquireLatestImage()
+                  } catch (t: Throwable) {
+                      null
+                  } ?: return
+                  try {
+                      val now = SystemClock.elapsedRealtime()
+                      val gap = 1000L / prefs.fps.coerceIn(2, 30)
+                      if (now - lastFrameAt < gap) return
+                      lastFrameAt = now
+
+                      val plane = img.planes[0]
+                      val buf = plane.buffer
+                      val rowStride = plane.rowStride
+                      val pxStride = plane.pixelStride
+                      val w = img.width
+                      val h = img.height
+                      if (w <= 0 || h <= 0 || rowStride <= 0 || pxStride <= 0) return
+
+                      val need = (h - 1) * rowStride + w * pxStride
+                      if (frameBuf.size < need) frameBuf = ByteArray(need)
+                      buf.rewind()
+                      buf.get(frameBuf, 0, min(need, buf.remaining()))
+
+                      val boxes = detector.feed(frameBuf, w, h, rowStride, pxStride)
+
+                      frameCount++
+                      if (now - fpsMark >= 1000L) {
+                          fps = frameCount * 1000f / (now - fpsMark)
+                          frameCount = 0
+                          fpsMark = now
+                      }
+
+                      val sx = screenW.toFloat() / w.toFloat()
+                      val sy = screenH.toFloat() / h.toFloat()
+                      val rects = ArrayList<RectF>(boxes.size)
+                      for (b in boxes) {
+                          rects.add(
+                              RectF(b.x * sx, b.y * sy, (b.x + b.w) * sx, (b.y + b.h) * sy)
+                          )
+                      }
+                      val count = boxes.size
+                      val fpsText = String.format("%.0f", fps)
+                      val hud = "LCS | " + count + " 目标 | " + fpsText + "fps | " + w + "x" + h +
+                          " | 灵敏" + prefs.sensitivity + " " + detector.orderLabel()
+                      main.post {
+                          overlay?.submit(rects, hud)
+                          panel?.setStatus("$count 目标 · $fpsText fps · ${w}x$h")
+                      }
+                  } catch (t: Throwable) {
+                  } finally {
+                      runCatching { img.close() }
+                  }
+              }
+
+              private fun stopAll(stopService: Boolean) {
+                  if (released) return
+                  released = true
+                  running = false
+                  generation++
+                  main.removeCallbacksAndMessages(null)
+
+                  runCatching { vd?.release() }
+                  vd = null
+                  runCatching { reader?.close() }
+                  reader = null
+                  runCatching { projection?.stop() }
+                  projection = null
+                  runCatching { thread?.quitSafely() }
+                  thread = null
+                  worker = null
+
+                  panel?.let { runCatching { wm.removeView(it) } }
+                  panel = null
+                  panelParams = null
+                  overlay?.clearAll()
+                  overlay?.let { runCatching { wm.removeView(it) } }
+                  overlay = null
+
+                  if (stopService) {
+                      ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                      stopSelf()
+                  }
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/lcs/deltaesp/MainActivity.kt <<'EOF'
+          package com.lcs.deltaesp
+
+          import android.Manifest
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.media.projection.MediaProjectionManager
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.text.InputType
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.app.ActivityCompat
+          import androidx.core.content.ContextCompat
+
+          class MainActivity : AppCompatActivity() {
+
+              companion object {
+                  private const val REQ_CAP = 1001
+                  private const val REQ_OVERLAY = 1002
+                  private const val REQ_NOTI = 1003
+                  private val CANDIDATES = listOf(
+                      "com.tencent.tmgp.dfm",
+                      "com.tencent.tmgp.dfmhd",
+                      "com.proxima.dfm",
+                      "com.tencent.dfm"
+                  )
+              }
+
+              private lateinit var prefs: Prefs
+              private lateinit var status: TextView
+              private lateinit var pkgInput: EditText
+              private var pendingStart = false
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  prefs = Prefs(this)
+                  setContentView(buildUi())
+                  detectInstalled()?.let {
+                      prefs.gamePkg = it
+                      pkgInput.setText(it)
+                  }
+                  askNotificationPermission()
+                  refresh()
+              }
+
+              private fun startFlow() {
+                  if (!Settings.canDrawOverlays(this)) {
+                      pendingStart = true
+                      requestOverlayPermission()
+                      return
+                  }
+                  val mpm = getSystemService(MediaProjectionManager::class.java)
+                  if (mpm == null) {
+                      status.text = "当前系统没有 MediaProjection 服务"
+                      return
+                  }
+                  @Suppress("DEPRECATION")
+                  startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAP)
+              }
+
+              private fun requestOverlayPermission() {
+                  val i = Intent(
+                      Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                      Uri.parse("package:$packageName")
+                  )
+                  try {
+                      startActivityForResult(i, REQ_OVERLAY)
+                  } catch (t: Throwable) {
+                      startActivityForResult(
+                          Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION), REQ_OVERLAY
+                      )
+                  }
+              }
+
+              private fun askNotificationPermission() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                      ContextCompat.checkSelfPermission(
+                          this, Manifest.permission.POST_NOTIFICATIONS
+                      ) != PackageManager.PERMISSION_GRANTED
+                  ) {
+                      ActivityCompat.requestPermissions(
+                          this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTI
+                      )
+                  }
+              }
+
+              @Deprecated("兼容旧路径")
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  super.onActivityResult(requestCode, resultCode, data)
+                  when (requestCode) {
+                      REQ_CAP -> {
+                          if (resultCode == RESULT_OK && data != null) {
+                              prefs.gamePkg =
+                                  pkgInput.text.toString().trim().ifEmpty { prefs.gamePkg }
+                              CaptureService.start(this, resultCode, data)
+                              status.text = "采集已启动，1.5 秒后切到游戏…"
+                              window.decorView.postDelayed({ launchGame() }, 1500)
+                          } else {
+                              status.text = "已取消录屏授权"
+                          }
+                      }
+                      REQ_OVERLAY -> {
+                          if (Settings.canDrawOverlays(this)) {
+                              if (pendingStart) {
+                                  pendingStart = false
+                                  startFlow()
+                              }
+                          } else {
+                              status.text = "悬浮窗权限仍未授予"
+                          }
+                      }
+                  }
+                  refresh()
+              }
+
+              private fun detectInstalled(): String? {
+                  for (p in CANDIDATES) {
+                      val i = try {
+                          packageManager.getLaunchIntentForPackage(p)
+                      } catch (t: Throwable) {
+                          null
+                      }
+                      if (i != null) return p
+                  }
+                  return null
+              }
+
+              private fun launchGame() {
+                  val pkg = pkgInput.text.toString().trim().ifEmpty { prefs.gamePkg }
+                  val intent = try {
+                      packageManager.getLaunchIntentForPackage(pkg)
+                  } catch (t: Throwable) {
+                      null
+                  }
+                  if (intent != null) {
+                      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                      startActivity(intent)
+                  } else {
+                      status.text = "未找到 " + pkg + "，请手动打开游戏或改包名"
+                  }
+              }
+
+              private fun refresh() {
+                  val overlay = if (Settings.canDrawOverlays(this)) "已授权" else "未授权"
+                  val mpm = getSystemService(MediaProjectionManager::class.java)
+                  val cap = if (mpm != null) "可用" else "不可用"
+                  status.text = "悬浮窗：" + overlay + "   录屏通道：" + cap + "\n" +
+                      "采样倍数：" + prefs.scale + "x   帧率：" + prefs.fps +
+                      "   默认包名：" + prefs.gamePkg
+              }
+
+              private fun buildUi(): View {
+                  val scroll = ScrollView(this).apply {
+                      setBackgroundColor(Color.parseColor("#0E1218"))
+                  }
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(18), dp(30), dp(18), dp(30))
+                  }
+                  scroll.addView(
+                      root,
+                      ViewGroup.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  root.addView(TextView(this).apply {
+                      text = "三角洲 · 悬浮透视助手"
+                      setTextColor(Color.parseColor("#00FFAA"))
+                      textSize = 21f
+                      typeface = Typeface.DEFAULT_BOLD
+                  })
+
+                  root.addView(TextView(this).apply {
+                      text = "通道：系统录屏 → 本地像素识别 → 悬浮窗绘制\n" +
+                          "不 Root / 不开 ADB / 不读写游戏进程内存 / 不入包"
+                      setTextColor(Color.parseColor("#93A3B1"))
+                      textSize = 12f
+                      setPadding(0, dp(8), 0, dp(16))
+                  })
+
+                  val btn1 = actionButton("① 授予悬浮窗权限", "#233240") {
+                      requestOverlayPermission()
+                  }
+                  val btn2 = actionButton("② 启动悬浮绘制", "#00FFAA", dark = true) {
+                      startFlow()
+                  }
+                  val btn3 = actionButton("③ 停止", "#233240") {
+                      CaptureService.stop(this)
+                      status.text = "已发送停止指令"
+                  }
+                  root.addView(btn1)
+                  root.addView(btn2)
+                  root.addView(btn3)
+
+                  root.addView(TextView(this).apply {
+                      text = "游戏包名"
+                      setTextColor(Color.parseColor("#C7D3DD"))
+                      textSize = 12f
+                      setPadding(0, dp(16), 0, dp(4))
+                  })
+                  pkgInput = EditText(this).apply {
+                      setText(prefs.gamePkg)
+                      hint = "com.tencent.tmgp.dfm"
+                      setTextColor(Color.WHITE)
+                      setHintTextColor(Color.parseColor("#55636F"))
+                      textSize = 13f
+                      typeface = Typeface.MONOSPACE
+                      inputType = InputType.TYPE_CLASS_TEXT
+                      setPadding(dp(10), dp(8), dp(10), dp(8))
+                      background = GradientDrawable().apply {
+                          cornerRadius = dp(10).toFloat()
+                          setColor(Color.parseColor("#161C24"))
+                          setStroke(dp(1), Color.parseColor("#2A3644"))
+                      }
+                  }
+                  root.addView(
+                      pkgInput,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  root.addView(actionButton("④ 启动游戏", "#233240") { launchGame() })
+
+                  status = TextView(this).apply {
+                      setTextColor(Color.parseColor("#7F8C99"))
+                      textSize = 11.5f
+                      typeface = Typeface.MONOSPACE
+                      setPadding(0, dp(18), 0, 0)
+                      text = "初始化…"
+                  }
+                  root.addView(status)
+
+                  root.addView(TextView(this).apply {
+                      text = "使用要点\n" +
+                          "1. 首次点②会弹系统录屏框，选“整个屏幕/整个设备”。\n" +
+                          "2. 面板可拖动；“采样倍数”改完要重新点②才生效。\n" +
+                          "3. 识别高饱和红色描边；框跳动先降灵敏度，再把采样调到 4~6。\n" +
+                          "4. 游戏切后台会被系统挂起，回前台自动恢复。"
+                      setTextColor(Color.parseColor("#66737F"))
+                      textSize = 11.5f
+                      setPadding(0, dp(22), 0, 0)
+                      setLineSpacing(dp(4).toFloat(), 1f)
+                  })
+
+                  return scroll
+              }
+
+              private fun actionButton(
+                  text: String, bg: String, dark: Boolean = false, onClick: () -> Unit
+              ): Button =
+                  Button(this).apply {
+                      setText(text)
+                      setTextColor(
+                          if (dark) Color.parseColor("#061014") else Color.parseColor("#D7E3EC")
+                      )
+                      textSize = 14f
+                      background = GradientDrawable().apply {
+                          cornerRadius = dp(12).toFloat()
+                          setColor(Color.parseColor(bg))
+                          if (!dark) setStroke(dp(1), Color.parseColor("#2A3644"))
+                      }
+                      setOnClickListener { onClick() }
+                      val lp = LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          dp(48)
+                      )
+                      lp.topMargin = dp(10)
+                      layoutParams = lp
+                  }
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+          }
+          EOF
+
+      - name: Build debug APK
+        run: gradle --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: delta-esp-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
